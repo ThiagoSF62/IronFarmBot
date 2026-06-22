@@ -6,6 +6,8 @@ const config = require('./config.json')
 let isEating = false
 let moveInterval = null
 let sleepInterval = null
+let statusInterval = null   // FIX: evita vazamento de setInterval ao reconectar
+let reconnecting = false    // FIX: evita criar 2 bots quando kicked + end disparam juntos
 let sessionStart = Date.now()
 const TP_STEP = 8       // blocks per teleport hop
 const TP_DELAY = 200    // ms between hops
@@ -29,6 +31,16 @@ function addLog(msg) {
     const time = new Date().toLocaleTimeString()
     state.log.unshift(`[${time}] ${msg}`)
     if (state.log.length > 80) state.log.pop()
+}
+
+// ── FIX: função centralizada de reconexão — impede dupla chamada ──────────
+function reconnect() {
+    if (reconnecting) return
+    reconnecting = true
+    setTimeout(() => {
+        reconnecting = false
+        createBot()
+    }, 5000)
 }
 
 // ── Express dashboard on port 5000 ────────────────────────────────────────
@@ -179,8 +191,9 @@ function createBot() {
         addLog(`Spawned at X:${Math.floor(p.x)} Y:${Math.floor(p.y)} Z:${Math.floor(p.z)}`)
     })
 
-    // Keep position updated every 2s
-    setInterval(() => {
+    // FIX: limpa o interval anterior antes de criar um novo — evita acúmulo após reconexões
+    if (statusInterval) clearInterval(statusInterval)
+    statusInterval = setInterval(() => {
         if (bot.entity) {
             const p = bot.entity.position
             state.position = { x: p.x, y: p.y, z: p.z }
@@ -767,13 +780,15 @@ function createBot() {
         }
     }
 
+    // FIX: ambos os eventos agora chamam reconnect() em vez de setTimeout(createBot, 5000)
+    // diretamente — o flag reconnecting garante que apenas um bot seja criado
     bot.on('kicked', (reason) => {
         console.log(`[BOT] Kicked: ${reason}`)
         state.status = 'Reconnecting...'
         addLog(`Kicked: ${reason}`)
         stopMoving(true)
         if (sleepInterval) { clearInterval(sleepInterval); sleepInterval = null }
-        setTimeout(createBot, 5000)
+        reconnect()
     })
 
     bot.on('error', (err) => {
@@ -786,7 +801,7 @@ function createBot() {
         addLog('Disconnected — reconnecting in 5s...')
         stopMoving(true)
         if (sleepInterval) { clearInterval(sleepInterval); sleepInterval = null }
-        setTimeout(createBot, 5000)
+        reconnect()
     })
 
     return bot
